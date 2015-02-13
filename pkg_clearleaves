@@ -1,0 +1,310 @@
+#!/usr/bin/env python
+# encoding: utf-8
+#
+# Copyright © 2015 Martin Tournoij <martin@arp242.net>
+# See below for full copyright
+#
+# Version 20150212
+# http://code.arp242.net/pkg_clearleaves.py
+# 
+# Inspired by: http://www.freshports.org/ports-mgmt/pkg_clearleaves/
+#
+
+from __future__ import print_function
+import argparse, os, platform, sys, subprocess, tempfile
+
+# For Python 2, where input() evals code
+try: input = raw_input
+except: pass
+
+
+class System(object):
+	""" Base class for all systems """
+
+	def __init__(self):
+		""" Read exclude file """
+
+		files = [
+			'/etc/pkg_leaves.exclude',
+			'/usr/local/etc/pkg_leaves.exclude',
+			'./pkg_leaves.exclude'
+		]
+
+		self.exclude = []
+		for f in files:
+			if not os.path.exists(f): continue
+			self.exclude = [ l.strip() for l in open(f, 'r').readlines() ]
+			break
+
+
+	def run(self, cmd):
+		""" Run a command; this default should be fine on most systems.
+			+cmd+ should be a list acceptable by +subprocess.Popen()+ """
+		proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+		return proc.communicate()[0].decode('utf-8')
+
+
+	def list_leafs(self):
+		""" Get a list of leaf packages
+			TODO: document format we expect this to return """
+		pass
+
+
+	def remove(self, pkgname):
+		""" Remove a package; you should be as verbose as possible about this,
+			output isn't shown by default, but we do show it when something goes
+			wrong. """
+		pass
+
+
+class Pacman(System):
+	name = 'pacman'
+
+	def list_leafs(self):
+		out = self.run(['pacman', '--query', '--quiet', '--unrequired', '--info'])
+		out = out.split('\n')
+
+		names = []
+		descs = []
+		maxlen = 0
+		procline = lambda l: ':'.join(l.split(':')[1:]).strip()
+		for i, line in enumerate(out):
+			if line.startswith('Name'):
+				name = procline(line)
+				if name in self.exclude: continue
+				name = '{} {}'.format(name, procline(out[i + 1]))
+				names.append(name)
+				descs.append(procline(out[i + 2]))
+
+				if len(name) > maxlen: maxlen = len(name)
+
+		out = []
+		for i, n in enumerate(names):
+			out.append('{}{}{}'.format(n, ' ' * (maxlen - len(n) + 2), descs[i]))
+		return out
+
+
+	def remove(self, pkgname):
+		self.run(['pacman', '--remove', '--noconfirm', '--verbose', pkgname])
+
+
+class FreeBSD(System):
+	name = 'freebsd'
+
+	def list_leafs(self):
+		# rev deps, Name, Version, comment
+		out = self.run(['pkg', 'query', '-a', '%?r %n %v %c']).strip()
+		out = [ o[1:].strip() for o in out.split('\n') if o[0] == '0' ]
+
+		names = []
+		descs = []
+		maxlen = 0
+		for line in out:
+			line = line.split(' ')
+
+			name = line[0]
+			version = line[1]
+			desc = ' '.join(line[2:])
+
+			if len(name) > maxlen: maxlen = len(name)
+			names.append(name)
+			descs.append(desc)
+
+		out = []
+		for i, n in enumerate(names):
+			out.append('{}{}{}'.format(n, ' ' * (maxlen - len(n) + 2), descs[i]))
+		return out
+
+
+	def remove(self, pkgname):
+		self.run(['pkg', 'remove', pkgname])
+
+
+def detect_system():
+	""" Try and detect the package system we're using; uses platform information
+		first, and falls back to detecting the existinse of binaries (eg dpkg,
+		pacman, etc) if that fails """
+
+	if platform.linux_distribution()[0] in ['arch']:
+		return Pacman()
+	elif platform.system() == 'FreeBSD':
+		return FreeBSD()
+	#elif platform.linux_distribution() in ['debian', 'ubuntu']:
+	#	return Dpkg()
+	#elif platform.linux_distribution() in ['redhat', 'centos', 'fedora']:
+	#	return Rpm()
+
+	# There are so many distros...
+	if in_path('pacman'):
+		return Pacman()
+	#elif in_path('dpkg'):
+	#	return Dpkg()
+	#elif in_path('rpm'):
+	#	return Rpm()
+
+	print("I'm sorry, but looks like your system isn't supported :-(")
+	print("It's also possible your system isn't detected properly; use `{} -P'".format(sys.argv[0]))
+	print("to get a list of supported platforms; you can use `{} -p platform_name'".format(sys,argv[0]))
+	print("to select one manually.")
+	print('')
+	print("Please email me at martin@arp242.net! If you provide some example")
+	print("outputs then I'm sure we can fix this ;-)")
+	sys.exit(2)
+
+
+def in_path(util):
+	""" Check if the commandline tool +util+ is in PATH and executable """
+
+	return subprocess.call(['which', util], stdout=subprocess.PIPE, stderr=subprocess.PIPE) == 0
+
+
+def get_editor():
+	""" Get the editor to use from EDITOR; fall back to vi.
+		TODO: maybe also try xdg-open? """
+
+	editor = os.getenv('EDITOR')
+	if editor in [None, '']:
+		for editor in ['vim', 'vi', 'nano', 'ee', 'emacs']:
+			if in_path(editor): break
+		else: 
+			print("Can't find an editor; set your EDITOR")
+			sys.exit(1)
+	return editor
+
+
+def run_editor(pkgs):
+	""" Write +pkgs+ to a temp file, run the editor. Returns a list with
+		packages *not* to be removed. """
+	with tempfile.NamedTemporaryFile('w+', prefix='pkg-cutleaves-') as fp:
+		fp.write('# Delete or comment out the lines whose packages you want removed.\n')
+		fp.write('# Simply save and quit when you\'re done.\n')
+		fp.write('\n'.join(pkgs))
+		fp.flush()
+		subprocess.call([get_editor(), fp.name])
+
+		fp.seek(0)
+		return [ l.strip() for l in fp.readlines() if not l.startswith('#') ]
+
+
+def ask_and_remove(pkgs, leave_installed):
+	""" Show packages to-be-removed, ask for confirmation, and remove """
+	remove = []
+	[ remove.append(p) for p in pkgs if p not in leave_installed ]
+	if len(remove) == 0:
+		print('Nothing to be removed')
+		sys.exit(0)
+
+	for r in remove: print(r)
+
+	answer = ask('Remove packages [Y/n]? ')
+	if answer in ['', 'y', 'Y', 'yes', 'YES']:
+		l = len(remove)
+		for i, r in enumerate(remove):
+			name = r.split(' ')[0]
+			print('[{}/{}] Removing {} '.format(i + 1, l, name), end='')
+			sys.stdout.flush()
+			system.remove(name)
+			print(' done')
+	else:
+		answer = ask('Do you want to edit the same list again? [Y/n]? ')
+		if answer in ['', 'y', 'Y', 'yes', 'YES']:
+			leave_installed = run_editor(pkgs)
+			return ask_and_remove(pkgs, leave_installed)
+		else:
+			print('Okay, bailing out!')
+			sys.exit(0)
+
+
+def ask(prompt):
+	try:
+		return input(prompt)
+	# Allow ^C without an exception
+	except KeyboardInterrupt:
+		print('')
+		sys.exit(0)
+
+
+if __name__ == '__main__':
+	parser = argparse.ArgumentParser(description=
+		'Remove "leaf" packages: packages that no other package depends on.')
+
+	parser.add_argument('-v', '--version', action='store_true',
+		help='show version and exit')
+	parser.add_argument('-P', '--list-platforms', action='store_true',
+		help='list all supported platforms')
+	parser.add_argument('-p', '--platform', default=None,
+		help='manually set platform (default is to autodetect)')
+	parser.add_argument('-x', '--no-exclude', action='store_true',
+		help='do *NOT* use the exclude file')
+	parser.add_argument('-l', '--list', action='store_true',
+		help="list leaf packages, but don't do anything else (useful for making the exclude file)")
+	args = vars(parser.parse_args())
+
+	if args['version']:
+		print("pkg_clearleaves 20150212 by Martin Tournoij <martin@arp242.net>")
+		print("http://code.arp242.net/pkg_clearleaves")
+		sys.exit(0)
+
+	if args['list_platforms']:
+		names = [ p.name for p in System.__subclasses__() ]
+		names.sort()
+		print('\n'.join(names))
+		sys.exit(0)
+
+	if args['platform']:
+		for system in System.__subclasses__():
+			if system.name == args['platform'].lower():
+				system = system()
+				break
+		else:
+			print("The platform `{}' is unknown; you can use `{} -P' to get a list".format(
+				args['platform'], sys.argv[0]))
+			sys.exit(3)
+	else: system = detect_system()
+
+	if args['no_exclude']: system.exclude = []
+
+	seen = []
+	pkgs = [ p for p in system.list_leafs() if p not in seen ]
+	if args['list']:
+		print('\n'.join([ p.split(' ')[0] for p in pkgs ]))
+		sys.exit(0)
+
+	if os.getuid() != 0:
+		print('We need root priviliges to remove packages')
+		sys.exit(1)
+
+	while True:
+		seen += pkgs
+		leave_installed = run_editor(pkgs)
+		ask_and_remove(pkgs, leave_installed)
+
+		pkgs = [ p for p in system.list_leafs() if p not in seen ]
+		if len(pkgs) == 0:
+			print('\nAll done')
+			break
+		answer = ask('Do you want to list new leaf packages [Y/n]? ')
+		if answer not in ['', 'y', 'Y', 'yes', 'YES']: break
+
+
+# The MIT License (MIT) 
+# 
+# Copyright © 2015 Martin Tournoij
+# 
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the “Software”), to
+# deal in the Software without restriction, including without limitation the
+# rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
+# sell copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+# 
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+# 
+# The software is provided "as is", without warranty of any kind, express or
+# implied, including but not limited to the warranties of merchantability,
+# fitness for a particular purpose and noninfringement. In no event shall the
+# authors or copyright holders be liable for any claim, damages or other
+# liability, whether in an action of contract, tort or otherwise, arising
+# from, out of or in connection with the software or the use or other dealings
+# in the software.
