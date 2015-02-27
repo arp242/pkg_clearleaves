@@ -4,7 +4,7 @@
 # Copyright © 2015 Martin Tournoij <martin@arp242.net>
 # See below for full copyright
 #
-# Version 20150212
+# Version 20150228 (unstable! Use at your own risk)
 # http://code.arp242.net/pkg_clearleaves.py
 # 
 # Inspired by: http://www.freshports.org/ports-mgmt/pkg_clearleaves/
@@ -13,9 +13,7 @@
 from __future__ import print_function
 import argparse, os, platform, sys, subprocess, tempfile
 
-# For Python 2, where input() evals code
-try: input = raw_input
-except: pass
+input = getattr(__builtins__, 'raw_input', input) # In Python 2 input() evals code
 
 
 class System(object):
@@ -155,7 +153,7 @@ def detect_system():
 def in_path(util):
 	""" Check if the commandline tool +util+ is in PATH and executable """
 
-	return subprocess.call(['which', util], stdout=subprocess.PIPE, stderr=subprocess.PIPE) == 0
+	return subprocess.call(['which', util], shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE) == 0
 
 
 def get_editor():
