@@ -1,17 +1,16 @@
 #!/usr/bin/env python
 # encoding: utf-8
 #
-# Copyright © 2015 Martin Tournoij <martin@arp242.net>
+# Copyright © 2015-2016 Martin Tournoij <martin@arp242.net>
 # See below for full copyright
 #
-# Version 20150228 (unstable! Use at your own risk)
-# http://code.arp242.net/pkg_clearleaves.py
+# http://code.arp242.net/pkg_clearleaves
 # 
 # Inspired by: http://www.freshports.org/ports-mgmt/pkg_clearleaves/
 #
 
 from __future__ import print_function
-import argparse, os, platform, sys, subprocess, tempfile
+import argparse, os, platform, re, sys, subprocess, tempfile
 
 input = getattr(__builtins__, 'raw_input', input) # In Python 2 input() evals code
 
@@ -20,12 +19,13 @@ class System(object):
 	""" Base class for all systems """
 
 	def __init__(self):
-		""" Read exclude file """
-
+		""" Read exclude file; usually, this default should be okay, unless your
+		system has other conventions for storing system-wide config files """
 		files = [
 			'/etc/pkg_leaves.exclude',
 			'/usr/local/etc/pkg_leaves.exclude',
-			'./pkg_leaves.exclude'
+			'/usr/pkg/etc/pkg_leaves.exclude',
+			'./pkg_leaves.exclude',
 		]
 
 		self.exclude = []
@@ -37,49 +37,77 @@ class System(object):
 
 	def run(self, cmd):
 		""" Run a command; this default should be fine on most systems.
-			+cmd+ should be a list acceptable by +subprocess.Popen()+ """
+		+cmd+ should be a list acceptable by +subprocess.Popen()+ """
 		proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
 		return proc.communicate()[0].decode('utf-8')
 
 
 	def list_leafs(self):
-		""" Get a list of leaf packages
-			TODO: document format we expect this to return """
+		""" Get a list of leaf packages; expected return value:
+		[
+			[pkg_name, display_pkg_name, comment],
+			...
+		]
+
+		The +pkg_name+ is what we will use to remove the package in +remove()+,
+		the +display_pkg_name+ is what is displayed to user in the editor,
+		together with the +comment+, which should be some description of what
+		the package is.
+		Note that 2 or more consecutive spaces are removed from any string. """
 		pass
 
 
 	def remove(self, pkgname):
-		""" Remove a package; you should be as verbose as possible about this,
-			output isn't shown by default, but we do show it when something goes
-			wrong. """
+		""" Remove a package; the tool doing the removing should be as verbose
+		as possible about this, output isn't shown by default, but we do show it
+		when something goes wrong. """
 		pass
 
 
 class Pacman(System):
+	""" Arch Linux and a few Arch-based distro's """
 	name = 'pacman'
 
 	def list_leafs(self):
+		""" Example output:
+		Name           : abs
+		Version        : 2.4.4-2
+		Description    : Utilities to download and work with the Arch Build
+		System (ABS)
+		Architecture   : x86_64
+		URL            : http://projects.archlinux.org/abs.git/
+		Licenses       : GPL
+		Groups         : None
+		Provides       : None
+		Depends On     : bash  rsync
+		Optional Deps  : None
+		Required By    : None
+		Optional For   : None
+		Conflicts With : None
+		Replaces       : None
+		Installed Size :  29.00 KiB
+		Packager       : Felix Yan <felixonmars@gmail.com>
+		Build Date     : Mon 30 Jun 2014 06:26:01 PM CEST
+		Install Date   : Tue 26 Aug 2014 10:35:16 AM CEST
+		Install Reason : Explicitly installed
+		Install Script : No
+		Validated By   : Signature
+		
+		[...] """
 		out = self.run(['pacman', '--query', '--quiet', '--unrequired', '--info'])
 		out = out.split('\n')
 
-		names = []
-		descs = []
-		maxlen = 0
+		pkgs = []
 		procline = lambda l: ':'.join(l.split(':')[1:]).strip()
 		for i, line in enumerate(out):
-			if line.startswith('Name'):
-				name = procline(line)
-				if name in self.exclude: continue
-				name = '{} {}'.format(name, procline(out[i + 1]))
-				names.append(name)
-				descs.append(procline(out[i + 2]))
+			if not line.startswith('Name'): continue
 
-				if len(name) > maxlen: maxlen = len(name)
-
-		out = []
-		for i, n in enumerate(names):
-			out.append('{}{}{}'.format(n, ' ' * (maxlen - len(n) + 2), descs[i]))
-		return out
+			name = procline(line)
+			if name in self.exclude: continue
+			version = procline(out[i + 1])
+			comment = procline(out[i + 2])
+			pkgs.append([name, '{} {}'.format(name, version), comment])
+		return pkgs
 
 
 	def remove(self, pkgname):
@@ -87,35 +115,106 @@ class Pacman(System):
 
 
 class FreeBSD(System):
+	""" FreeBSD; the so-called 'pkg-ng' tools """
 	name = 'freebsd'
 
 	def list_leafs(self):
-		# rev deps, Name, Version, comment
+		""" Example output:
+		0 chicken 4.9.0.1_1 Scheme-to-C compiler
+		[...]
+		"""
+		# %?r returns 0 if the list is empty and 1 if the list has information
+		#    for reverse dependencies
+		# %n  Name of the package
+		# %v  Version of the matched package
+		# %c  Comment of the matched package
+
 		out = self.run(['pkg', 'query', '-a', '%?r %n %v %c']).strip()
 		out = [ o[1:].strip() for o in out.split('\n') if o[0] == '0' ]
 
-		names = []
-		descs = []
-		maxlen = 0
+		pkgs = []
 		for line in out:
 			line = line.split(' ')
+			pkgs.append([line[0], '{} {}'.format(line[0], line[1]), ' '.join(line[2:])])
 
-			name = line[0]
-			version = line[1]
-			desc = ' '.join(line[2:])
-
-			if len(name) > maxlen: maxlen = len(name)
-			names.append(name)
-			descs.append(desc)
-
-		out = []
-		for i, n in enumerate(names):
-			out.append('{}{}{}'.format(n, ' ' * (maxlen - len(n) + 2), descs[i]))
-		return out
+		return pkgs
 
 
 	def remove(self, pkgname):
 		self.run(['pkg', 'remove', pkgname])
+
+
+class Rpm(System):
+	""" RedHat and derivatives (CentOS, Fedora, SUSE, many more) """
+	name = 'rpm'
+
+
+	def list_leafs(self):
+		"""
+		RPM packages list a number of "capabilities", and may require a number
+		of "capabilities"; for example, there is usually no dependency on
+		'glibc', but a dependency on the capability 'libc.so.6', which 'glibc'
+		provides.
+		This is rather flexible, but also makes this function rather large :-/ I
+		guess this is why you have 8 different front-ends for RPM...
+		"""
+
+		pkgs = self.run(['rpm', '--query', '--all', '--queryformat', '%{name} %{version} %{summary}\n']).strip()
+		pkgs = [ [o[0], '{} {}'.format(o[0], o[1]), ' '.join(o[1:])] for o in [ p.split(' ') for p in pkgs ] ]
+		requires_cache = {}
+		leaf_pkgs = []
+		for p in pkgs:
+			requires = self.run(['rpm', '--query', '--whatrequires', p[0]]).split('\n')
+			# Output is like:
+			#   no package requires sudo
+			# or:
+			#   initscripts-9.03.40-2.el6.centos.x86_64
+			#   dracut-004-335.el6.noarch
+			#
+			# But this may differ per version, and is dependent on locale
+			# settings... So we use this check:
+			if len(requires) == 1 and requires[0].trim().endswith(p[0]):
+				leaf_pkgs.append(p)
+
+		return leaf_pkgs
+
+
+	def remove(self, pkgname):
+		self.run(['yum', 'remove', '-y', pkgname])
+
+
+class Dpkg(System):
+	""" Debian and derivatives (Ubuntu, many more) """
+	name = 'dpkg'
+
+
+	def list_leafs(self):
+		"""
+		"""
+
+		leaf_pkgs = []
+		pkgs = self.run(['dpkg-query', '--list']).strip().split('\n')
+		pkgs = pkgs[5:]
+		for p in pkgs:
+			if not p.startswith('ii'):
+				continue
+			p = p[4:]
+			p = filter(len, p.split(' '))
+			p = [p[0], p[0], ' '.join(p[3:])]
+			#[pkg_name, display_pkg_name, comment],
+			# TODO: We can use apt-cache rdepends .* to get a list of all
+			# packages. Lots faster!
+			requires = self.run(['apt-cache', 'rdepends', '--installed',
+				'--no-conflicts', '--no-breaks', '--no-replaces',
+				p[0]]).strip().split('\n')
+			if len(requires) == 2:
+				leaf_pkgs.append(p)
+
+		return leaf_pkgs
+
+
+	def remove(self, pkgname):
+		self.run(['apt-get', 'remove', '-y', pkgname])
 
 
 def detect_system():
@@ -127,26 +226,26 @@ def detect_system():
 		return Pacman()
 	elif platform.system() == 'FreeBSD':
 		return FreeBSD()
-	#elif platform.linux_distribution() in ['debian', 'ubuntu']:
-	#	return Dpkg()
-	#elif platform.linux_distribution() in ['redhat', 'centos', 'fedora']:
-	#	return Rpm()
+	elif platform.linux_distribution()[0].lower() in ['debian', 'ubuntu']:
+		return Dpkg()
+	elif platform.linux_distribution()[0].lower() in ['redhat', 'centos', 'fedora']:
+		return Rpm()
 
 	# There are so many distros...
 	if in_path('pacman'):
 		return Pacman()
-	#elif in_path('dpkg'):
-	#	return Dpkg()
-	#elif in_path('rpm'):
-	#	return Rpm()
+	elif in_path('dpkg'):
+		return Dpkg()
+	elif in_path('rpm'):
+		return Rpm()
 
 	print("I'm sorry, but looks like your system isn't supported :-(")
 	print("It's also possible your system isn't detected properly; use `{} -P'".format(sys.argv[0]))
-	print("to get a list of supported platforms; you can use `{} -p platform_name'".format(sys,argv[0]))
+	print("to get a list of supported platforms; you can use `{} -p platform_name'".format(sys.argv[0]))
 	print("to select one manually.")
 	print('')
-	print("Please email me at martin@arp242.net! If you provide some example")
-	print("outputs then I'm sure we can fix this ;-)")
+	print("Please email me at martin@arp242.net! If you provide some example outputs then")
+	print("I'm sure we can fix this ;-)")
 	sys.exit(2)
 
 
@@ -158,7 +257,7 @@ def in_path(util):
 
 def get_editor():
 	""" Get the editor to use from EDITOR; fall back to vi.
-		TODO: maybe also try xdg-open? """
+	TODO: maybe also try xdg-open? """
 
 	editor = os.getenv('EDITOR')
 	if editor in [None, '']:
@@ -172,27 +271,39 @@ def get_editor():
 
 def run_editor(pkgs):
 	""" Write +pkgs+ to a temp file, run the editor. Returns a list with
-		packages *not* to be removed. """
+	packages *not* to be removed. """
+
+	maxlen = max([ len(p[1]) for p in pkgs ])
+	pkgs_fmt = [ '{}{}{}'.format(p[1], ' ' * (maxlen - len(p[1]) + 2), p[2]) for p in pkgs ]
+
 	with tempfile.NamedTemporaryFile('w+', prefix='pkg-cutleaves-') as fp:
 		fp.write('# Delete or comment out the lines whose packages you want removed.\n')
 		fp.write('# Simply save and quit when you\'re done.\n')
-		fp.write('\n'.join(pkgs))
+		fp.write('\n'.join(pkgs_fmt))
 		fp.flush()
 		subprocess.call([get_editor(), fp.name])
 
-		fp.seek(0)
-		return [ l.strip() for l in fp.readlines() if not l.startswith('#') ]
+		# We re-open the path, since some editors (Vim) may have written a
+		# different file (inode-wise) to the same pathname
+		with open(fp.name, 'r') as rfp:
+			return [ l.strip() for l in rfp.readlines() if not l.startswith('#') ]
 
 
 def ask_and_remove(pkgs, leave_installed):
 	""" Show packages to-be-removed, ask for confirmation, and remove """
+
+	# Remove comment part
+	li = [ l.split('  ')[0] for l in leave_installed ]
+
 	remove = []
-	[ remove.append(p) for p in pkgs if p not in leave_installed ]
+	[ remove.append(p[0]) for p in pkgs if p[1] not in li ]
 	if len(remove) == 0:
 		print('Nothing to be removed')
 		sys.exit(0)
 
-	for r in remove: print(r)
+	print()
+	for r in remove: print(' ', r)
+	print()
 
 	answer = ask('Remove packages [Y/n]? ')
 	if answer in ['', 'y', 'Y', 'yes', 'YES']:
@@ -239,7 +350,7 @@ if __name__ == '__main__':
 	args = vars(parser.parse_args())
 
 	if args['version']:
-		print("pkg_clearleaves 20150212 by Martin Tournoij <martin@arp242.net>")
+		print("pkg_clearleaves 1.1 by Martin Tournoij <martin@arp242.net>")
 		print("http://code.arp242.net/pkg_clearleaves")
 		sys.exit(0)
 
@@ -263,21 +374,24 @@ if __name__ == '__main__':
 	if args['no_exclude']: system.exclude = []
 
 	seen = []
-	pkgs = [ p for p in system.list_leafs() if p not in seen ]
+	pkgs = [ p for p in system.list_leafs() if p[0] not in seen ]
+	pkgs = [ [ re.sub(' +', ' ', e) for e in p ] for p in pkgs ]
+
 	if args['list']:
 		print('\n'.join([ p.split(' ')[0] for p in pkgs ]))
 		sys.exit(0)
 
 	if os.getuid() != 0:
-		print('We need root priviliges to remove packages')
+		print('We need root privileges to remove packages')
 		sys.exit(1)
 
 	while True:
-		seen += pkgs
+		seen += [ p[0] for p in pkgs ]
 		leave_installed = run_editor(pkgs)
 		ask_and_remove(pkgs, leave_installed)
 
-		pkgs = [ p for p in system.list_leafs() if p not in seen ]
+		pkgs = [ p for p in system.list_leafs() if p[0] not in seen ]
+		pkgs = [ [ re.sub(' +', ' ', e) for e in p ] for p in pkgs ]
 		if len(pkgs) == 0:
 			print('\nAll done')
 			break
@@ -287,7 +401,7 @@ if __name__ == '__main__':
 
 # The MIT License (MIT) 
 # 
-# Copyright © 2015 Martin Tournoij
+# Copyright © 2015-2016 Martin Tournoij
 # 
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the “Software”), to
