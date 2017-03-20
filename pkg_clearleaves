@@ -1,27 +1,44 @@
 #!/usr/bin/env python
 # encoding: utf-8
 #
-# Copyright © 2015-2016 Martin Tournoij <martin@arp242.net>
+# Copyright © 2015-2017 Martin Tournoij <martin@arp242.net>
 # See below for full copyright
 #
 # http://code.arp242.net/pkg_clearleaves
-# 
+#
 # Inspired by: http://www.freshports.org/ports-mgmt/pkg_clearleaves/
 #
 
 from __future__ import print_function
-import argparse, os, platform, re, sys, subprocess, tempfile
+import argparse
+import os
+import platform
+import re
+import subprocess
+import sys
+import tempfile
 
-input = getattr(__builtins__, 'raw_input', input) # In Python 2 input() evals code
+# In Python 2 input() evals code
+input = getattr(__builtins__, 'raw_input', input)
 
 
 class System(object):
     """ Base class for all systems """
 
-    def __init__(self):
+    def load_exclude(self, exclude_path):
         """ Read exclude file; usually, this default should be okay, unless your
         system has other conventions for storing system-wide config files """
+
+        if exclude_path == 'NONE':
+            return
+
+        if exclude_path is not None and not os.path.exists(exclude_path):
+            print("error: exclude file '{}' doesn't exist".format(exclude_path),
+                  file=sys.stderr)
+            sys.exit(1)
+
         files = [
+            (exclude_path or ''),
             '/etc/pkg_leaves.exclude',
             '/usr/local/etc/pkg_leaves.exclude',
             '/usr/pkg/etc/pkg_leaves.exclude',
@@ -30,17 +47,18 @@ class System(object):
 
         self.exclude = []
         for f in files:
-            if not os.path.exists(f): continue
-            self.exclude = [ l.strip() for l in open(f, 'r').readlines() ]
+            if not os.path.exists(f):
+                continue
+            self.exclude = [l.strip() for l in open(f, 'r').readlines()]
             break
-
 
     def run(self, cmd):
         """ Run a command; this default should be fine on most systems.
         +cmd+ should be a list acceptable by +subprocess.Popen()+ """
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        proc = subprocess.Popen(cmd,
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT)
         return proc.communicate()[0].decode('utf-8')
-
 
     def list_leafs(self):
         """ Get a list of leaf packages; expected return value:
@@ -55,7 +73,6 @@ class System(object):
         the package is.
         Note that 2 or more consecutive spaces are removed from any string. """
         pass
-
 
     def remove(self, pkgname):
         """ Remove a package; the tool doing the removing should be as verbose
@@ -92,7 +109,7 @@ class Pacman(System):
         Install Reason : Explicitly installed
         Install Script : No
         Validated By   : Signature
-        
+       
         [...] """
         out = self.run(['pacman', '--query', '--quiet', '--unrequired', '--info'])
         out = out.split('\n')
@@ -100,15 +117,16 @@ class Pacman(System):
         pkgs = []
         procline = lambda l: ':'.join(l.split(':')[1:]).strip()
         for i, line in enumerate(out):
-            if not line.startswith('Name'): continue
+            if not line.startswith('Name'):
+                continue
 
             name = procline(line)
-            if name in self.exclude: continue
+            if name in self.exclude:
+                continue
             version = procline(out[i + 1])
             comment = procline(out[i + 2])
             pkgs.append([name, '{} {}'.format(name, version), comment])
         return pkgs
-
 
     def remove(self, pkgname):
         self.run(['pacman', '--remove', '--noconfirm', '--verbose', pkgname])
@@ -130,7 +148,7 @@ class FreeBSD(System):
         # %c  Comment of the matched package
 
         out = self.run(['pkg', 'query', '-a', '%?r %n %v %c']).strip()
-        out = [ o[1:].strip() for o in out.split('\n') if o[0] == '0' ]
+        out = [o[1:].strip() for o in out.split('\n') if o[0] == '0']
 
         pkgs = []
         for line in out:
@@ -139,7 +157,6 @@ class FreeBSD(System):
 
         return pkgs
 
-
     def remove(self, pkgname):
         self.run(['pkg', 'remove', pkgname])
 
@@ -147,7 +164,6 @@ class FreeBSD(System):
 class Rpm(System):
     """ RedHat and derivatives (CentOS, Fedora, SUSE, many more) """
     name = 'rpm'
-
 
     def list_leafs(self):
         """
@@ -160,7 +176,7 @@ class Rpm(System):
         """
 
         pkgs = self.run(['rpm', '--query', '--all', '--queryformat', '%{name} %{version} %{summary}\n']).strip()
-        pkgs = [ [o[0], '{} {}'.format(o[0], o[1]), ' '.join(o[1:])] for o in [ p.split(' ') for p in pkgs ] ]
+        pkgs = [[o[0], '{} {}'.format(o[0], o[1]), ' '.join(o[1:])] for o in [p.split(' ') for p in pkgs]]
         requires_cache = {}
         leaf_pkgs = []
         for p in pkgs:
@@ -178,7 +194,6 @@ class Rpm(System):
 
         return leaf_pkgs
 
-
     def remove(self, pkgname):
         self.run(['yum', 'remove', '-y', pkgname])
 
@@ -186,7 +201,6 @@ class Rpm(System):
 class Dpkg(System):
     """ Debian and derivatives (Ubuntu, many more) """
     name = 'dpkg'
-
 
     def list_leafs(self):
         """
@@ -201,17 +215,16 @@ class Dpkg(System):
             p = p[4:]
             p = filter(len, p.split(' '))
             p = [p[0], p[0], ' '.join(p[3:])]
-            #[pkg_name, display_pkg_name, comment],
+            # [pkg_name, display_pkg_name, comment],
             # TODO: We can use apt-cache rdepends .* to get a list of all
             # packages. Lots faster!
             requires = self.run(['apt-cache', 'rdepends', '--installed',
-                '--no-conflicts', '--no-breaks', '--no-replaces',
-                p[0]]).strip().split('\n')
+                                 '--no-conflicts', '--no-breaks',
+                                 '--no-replaces', p[0]]).strip().split('\n')
             if len(requires) == 2:
                 leaf_pkgs.append(p)
 
         return leaf_pkgs
-
 
     def remove(self, pkgname):
         self.run(['apt-get', 'remove', '-y', pkgname])
@@ -276,8 +289,8 @@ def run_editor(pkgs):
     """ Write +pkgs+ to a temp file, run the editor. Returns a list with
     packages *not* to be removed. """
 
-    maxlen = max([ len(p[1]) for p in pkgs ])
-    pkgs_fmt = [ '{}{}{}'.format(p[1], ' ' * (maxlen - len(p[1]) + 2), p[2]) for p in pkgs ]
+    maxlen = max([len(p[1]) for p in pkgs])
+    pkgs_fmt = ['{}{}{}'.format(p[1], ' ' * (maxlen - len(p[1]) + 2), p[2]) for p in pkgs]
 
     with tempfile.NamedTemporaryFile('w+', prefix='pkg-cutleaves-') as fp:
         fp.write('# Delete or comment out the lines whose packages you want removed.\n')
@@ -289,23 +302,24 @@ def run_editor(pkgs):
         # We re-open the path, since some editors (Vim) may have written a
         # different file (inode-wise) to the same pathname
         with open(fp.name, 'r') as rfp:
-            return [ l.strip() for l in rfp.readlines() if not l.startswith('#') ]
+            return [l.strip() for l in rfp.readlines() if not l.startswith('#')]
 
 
 def ask_and_remove(pkgs, leave_installed):
     """ Show packages to-be-removed, ask for confirmation, and remove """
 
     # Remove comment part
-    li = [ l.split('  ')[0] for l in leave_installed ]
+    li = [l.split('  ')[0] for l in leave_installed]
 
     remove = []
-    [ remove.append(p[0]) for p in pkgs if p[1] not in li ]
+    [remove.append(p[0]) for p in pkgs if p[1] not in li]
     if len(remove) == 0:
         print('Nothing to be removed')
         sys.exit(0)
 
     print()
-    for r in remove: print(' ', r)
+    for r in remove:
+        print(' ', r)
     print()
 
     answer = ask('Remove packages [Y/n]? ')
@@ -337,28 +351,32 @@ def ask(prompt):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description=
-        'Remove "leaf" packages: packages that no other package depends on.')
+    parser = argparse.ArgumentParser(
+        description='Remove "leaf" packages: packages that no other package'
+                    ' depends on.')
 
     parser.add_argument('-v', '--version', action='store_true',
-        help='show version and exit')
+                        help='show version and exit')
     parser.add_argument('-P', '--list-platforms', action='store_true',
-        help='list all supported platforms')
+                        help='list all supported platforms')
     parser.add_argument('-p', '--platform', default=None,
-        help='manually set platform (default is to autodetect)')
-    parser.add_argument('-x', '--no-exclude', action='store_true',
-        help='do *NOT* use the exclude file')
+                        help='set platform (default is to autodetect)')
+    parser.add_argument('-x', '--exclude',
+                        help='set exclude file; defaults to pkg_leaves.exclude'
+                             ' in the usual directories (including cwd). Use'
+                             ' -x NONE to *NOT* use the exclude file')
     parser.add_argument('-l', '--list', action='store_true',
-        help="list leaf packages, but don't do anything else (useful for making the exclude file)")
+                        help="list leaf packages, but don't do anything else"
+                             " (useful for making the exclude file)")
     args = vars(parser.parse_args())
 
     if args['version']:
-        print("pkg_clearleaves 1.1 by Martin Tournoij <martin@arp242.net>")
+        print("pkg_clearleaves 1.2 by Martin Tournoij <martin@arp242.net>")
         print("http://code.arp242.net/pkg_clearleaves")
         sys.exit(0)
 
     if args['list_platforms']:
-        names = [ p.name for p in System.__subclasses__() ]
+        names = [p.name for p in System.__subclasses__()]
         names.sort()
         print('\n'.join(names))
         sys.exit(0)
@@ -372,16 +390,17 @@ if __name__ == '__main__':
             print("The platform `{}' is unknown; you can use `{} -P' to get a list".format(
                 args['platform'], sys.argv[0]))
             sys.exit(3)
-    else: system = detect_system()
+    else:
+        system = detect_system()
 
-    if args['no_exclude']: system.exclude = []
+    system.load_exclude(args['exclude'])
 
     seen = []
-    pkgs = [ p for p in system.list_leafs() if p[0] not in seen ]
-    pkgs = [ [ re.sub(' +', ' ', e) for e in p ] for p in pkgs ]
+    pkgs = [p for p in system.list_leafs() if p[0] not in seen]
+    pkgs = [[re.sub(' +', ' ', e) for e in p] for p in pkgs]
 
     if args['list']:
-        print('\n'.join([ p.split(' ')[0] for p in pkgs ]))
+        print('\n'.join([p[0] for p in pkgs]))
         sys.exit(0)
 
     if os.getuid() != 0:
@@ -389,33 +408,37 @@ if __name__ == '__main__':
         sys.exit(1)
 
     while True:
-        seen += [ p[0] for p in pkgs ]
+        seen += [p[0] for p in pkgs]
+        if len(pkgs) == 0:
+            print('No leaf packages ({} excluded).'.format(len(system.exclude)))
+            sys.exit(0)
         leave_installed = run_editor(pkgs)
         ask_and_remove(pkgs, leave_installed)
 
-        pkgs = [ p for p in system.list_leafs() if p[0] not in seen ]
-        pkgs = [ [ re.sub(' +', ' ', e) for e in p ] for p in pkgs ]
+        pkgs = [p for p in system.list_leafs() if p[0] not in seen]
+        pkgs = [[re.sub(' +', ' ', e) for e in p] for p in pkgs]
         if len(pkgs) == 0:
             print('\nAll done')
             break
         answer = ask('Do you want to list new leaf packages [Y/n]? ')
-        if answer not in ['', 'y', 'Y', 'yes', 'YES']: break
+        if answer not in ['', 'y', 'Y', 'yes', 'YES']:
+            break
 
 
-# The MIT License (MIT) 
-# 
-# Copyright © 2015-2016 Martin Tournoij
-# 
+# The MIT License (MIT)
+#
+# Copyright © 2015-2017 Martin Tournoij
+#
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the “Software”), to
 # deal in the Software without restriction, including without limitation the
 # rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
 # sell copies of the Software, and to permit persons to whom the Software is
 # furnished to do so, subject to the following conditions:
-# 
+#
 # The above copyright notice and this permission notice shall be included in
 # all copies or substantial portions of the Software.
-# 
+#
 # The software is provided "as is", without warranty of any kind, express or
 # implied, including but not limited to the warranties of merchantability,
 # fitness for a particular purpose and noninfringement. In no event shall the
