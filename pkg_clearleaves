@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # encoding: utf-8
 #
-# Copyright © 2015-2017 Martin Tournoij <martin@arp242.net>
+# Copyright © 2015-2019 Martin Tournoij <martin@arp242.net>
 # See below for full copyright
 #
 # http://code.arp242.net/pkg_clearleaves
@@ -12,11 +12,12 @@
 from __future__ import print_function
 import argparse
 import os
-import platform
 import re
 import subprocess
 import sys
 import tempfile
+
+import distro
 
 # In Python 2 input() evals code
 input = getattr(__builtins__, 'raw_input', input)
@@ -76,8 +77,8 @@ class System(object):
 
     def remove(self, pkgname):
         """ Remove a package; the tool doing the removing should be as verbose
-        as possible about this, output isn't shown by default, but we do show it
-        when something goes wrong. """
+        as possible about this, output isn't shown by default, but we do show
+        it when something goes wrong. """
         pass
 
 
@@ -109,13 +110,16 @@ class Pacman(System):
         Install Reason : Explicitly installed
         Install Script : No
         Validated By   : Signature
-       
+
         [...] """
-        out = self.run(['pacman', '--query', '--quiet', '--unrequired', '--info'])
+        out = self.run(['pacman', '--query', '--quiet',
+                        '--unrequired', '--info'])
         out = out.split('\n')
 
+        def procline(l):
+            return ':'.join(l.split(':')[1:]).strip()
+
         pkgs = []
-        procline = lambda l: ':'.join(l.split(':')[1:]).strip()
         for i, line in enumerate(out):
             if not line.startswith('Name'):
                 continue
@@ -132,102 +136,102 @@ class Pacman(System):
         self.run(['pacman', '--remove', '--noconfirm', '--verbose', pkgname])
 
 
-class FreeBSD(System):
-    """ FreeBSD; the so-called 'pkg-ng' tools """
-    name = 'freebsd'
-
-    def list_leafs(self):
-        """ Example output:
-        0 chicken 4.9.0.1_1 Scheme-to-C compiler
-        [...]
-        """
-        # %?r returns 0 if the list is empty and 1 if the list has information
-        #    for reverse dependencies
-        # %n  Name of the package
-        # %v  Version of the matched package
-        # %c  Comment of the matched package
-
-        out = self.run(['pkg', 'query', '-a', '%?r %n %v %c']).strip()
-        out = [o[1:].strip() for o in out.split('\n') if o[0] == '0']
-
-        pkgs = []
-        for line in out:
-            line = line.split(' ')
-            pkgs.append([line[0], '{} {}'.format(line[0], line[1]), ' '.join(line[2:])])
-
-        return pkgs
-
-    def remove(self, pkgname):
-        self.run(['pkg', 'remove', pkgname])
-
-
-class Rpm(System):
-    """ RedHat and derivatives (CentOS, Fedora, SUSE, many more) """
-    name = 'rpm'
-
-    def list_leafs(self):
-        """
-        RPM packages list a number of "capabilities", and may require a number
-        of "capabilities"; for example, there is usually no dependency on
-        'glibc', but a dependency on the capability 'libc.so.6', which 'glibc'
-        provides.
-        This is rather flexible, but also makes this function rather large :-/ I
-        guess this is why you have 8 different front-ends for RPM...
-        """
-
-        pkgs = self.run(['rpm', '--query', '--all', '--queryformat', '%{name} %{version} %{summary}\n']).strip()
-        pkgs = [[o[0], '{} {}'.format(o[0], o[1]), ' '.join(o[1:])] for o in [p.split(' ') for p in pkgs]]
-        requires_cache = {}
-        leaf_pkgs = []
-        for p in pkgs:
-            requires = self.run(['rpm', '--query', '--whatrequires', p[0]]).split('\n')
-            # Output is like:
-            #   no package requires sudo
-            # or:
-            #   initscripts-9.03.40-2.el6.centos.x86_64
-            #   dracut-004-335.el6.noarch
-            #
-            # But this may differ per version, and is dependent on locale
-            # settings... So we use this check:
-            if len(requires) == 1 and requires[0].trim().endswith(p[0]):
-                leaf_pkgs.append(p)
-
-        return leaf_pkgs
-
-    def remove(self, pkgname):
-        self.run(['yum', 'remove', '-y', pkgname])
+# class FreeBSD(System):
+#     """ FreeBSD; the so-called 'pkg-ng' tools """
+#     name = 'freebsd'
+#
+#     def list_leafs(self):
+#         """ Example output:
+#         0 chicken 4.9.0.1_1 Scheme-to-C compiler
+#         [...]
+#         """
+#         # %?r returns 0 if the list is empty and 1 if the list has information
+#         #    for reverse dependencies
+#         # %n  Name of the package
+#         # %v  Version of the matched package
+#         # %c  Comment of the matched package
+#
+#         out = self.run(['pkg', 'query', '-a', '%?r %n %v %c']).strip()
+#         out = [o[1:].strip() for o in out.split('\n') if o[0] == '0']
+#
+#         pkgs = []
+#         for line in out:
+#             line = line.split(' ')
+#             pkgs.append([line[0], '{} {}'.format(line[0], line[1]), ' '.join(line[2:])])
+#
+#         return pkgs
+#
+#     def remove(self, pkgname):
+#         self.run(['pkg', 'remove', pkgname])
 
 
-class Dpkg(System):
-    """ Debian and derivatives (Ubuntu, many more) """
-    name = 'dpkg'
+# class Rpm(System):
+#     """ RedHat and derivatives (CentOS, Fedora, SUSE, many more) """
+#     name = 'rpm'
+#
+#     def list_leafs(self):
+#         """
+#         RPM packages list a number of "capabilities", and may require a number
+#         of "capabilities"; for example, there is usually no dependency on
+#         'glibc', but a dependency on the capability 'libc.so.6', which 'glibc'
+#         provides.
+#         This is rather flexible, but also makes this function rather large :-/ I
+#         guess this is why you have 8 different front-ends for RPM...
+#         """
+#
+#         pkgs = self.run(['rpm', '--query', '--all', '--queryformat', '%{name} %{version} %{summary}\n']).strip()
+#         pkgs = [[o[0], '{} {}'.format(o[0], o[1]), ' '.join(o[1:])] for o in [p.split(' ') for p in pkgs]]
+#         requires_cache = {}
+#         leaf_pkgs = []
+#         for p in pkgs:
+#             requires = self.run(['rpm', '--query', '--whatrequires', p[0]]).split('\n')
+#             # Output is like:
+#             #   no package requires sudo
+#             # or:
+#             #   initscripts-9.03.40-2.el6.centos.x86_64
+#             #   dracut-004-335.el6.noarch
+#             #
+#             # But this may differ per version, and is dependent on locale
+#             # settings... So we use this check:
+#             if len(requires) == 1 and requires[0].trim().endswith(p[0]):
+#                 leaf_pkgs.append(p)
+#
+#         return leaf_pkgs
+#
+#     def remove(self, pkgname):
+#         self.run(['yum', 'remove', '-y', pkgname])
 
-    def list_leafs(self):
-        """
-        """
 
-        leaf_pkgs = []
-        pkgs = self.run(['dpkg-query', '--list']).strip().split('\n')
-        pkgs = pkgs[5:]
-        for p in pkgs:
-            if not p.startswith('ii'):
-                continue
-            p = p[4:]
-            p = filter(len, p.split(' '))
-            p = [p[0], p[0], ' '.join(p[3:])]
-            # [pkg_name, display_pkg_name, comment],
-            # TODO: We can use apt-cache rdepends .* to get a list of all
-            # packages. Lots faster!
-            requires = self.run(['apt-cache', 'rdepends', '--installed',
-                                 '--no-conflicts', '--no-breaks',
-                                 '--no-replaces', p[0]]).strip().split('\n')
-            if len(requires) == 2:
-                leaf_pkgs.append(p)
-
-        return leaf_pkgs
-
-    def remove(self, pkgname):
-        self.run(['apt-get', 'remove', '-y', pkgname])
+# class Dpkg(System):
+#     """ Debian and derivatives (Ubuntu, many more) """
+#     name = 'dpkg'
+#
+#     def list_leafs(self):
+#         """
+#         """
+#
+#         leaf_pkgs = []
+#         pkgs = self.run(['dpkg-query', '--list']).strip().split('\n')
+#         pkgs = pkgs[5:]
+#         for p in pkgs:
+#             if not p.startswith('ii'):
+#                 continue
+#             p = p[4:]
+#             p = filter(len, p.split(' '))
+#             p = [p[0], p[0], ' '.join(p[3:])]
+#             # [pkg_name, display_pkg_name, comment],
+#             # TODO: We can use apt-cache rdepends .* to get a list of all
+#             # packages. Lots faster!
+#             requires = self.run(['apt-cache', 'rdepends', '--installed',
+#                                  '--no-conflicts', '--no-breaks',
+#                                  '--no-replaces', p[0]]).strip().split('\n')
+#             if len(requires) == 2:
+#                 leaf_pkgs.append(p)
+#
+#         return leaf_pkgs
+#
+#     def remove(self, pkgname):
+#         self.run(['apt-get', 'remove', '-y', pkgname])
 
 
 def detect_system():
@@ -235,26 +239,29 @@ def detect_system():
         first, and falls back to detecting the existinse of binaries (eg dpkg,
         pacman, etc) if that fails """
 
-    if platform.linux_distribution()[0] in ['arch']:
+    dist = distro.id()
+    if dist == 'arch':
         return Pacman()
-    elif platform.system() == 'FreeBSD':
-        return FreeBSD()
-    elif platform.linux_distribution()[0].lower() in ['debian', 'ubuntu']:
-        return Dpkg()
-    elif platform.linux_distribution()[0].lower() in ['redhat', 'centos', 'fedora']:
-        return Rpm()
+    # elif dist == 'freebsd':
+    #     return FreeBSD()
+    # elif dist in ['debian', 'ubuntu']:
+    #     return Dpkg()
+    # elif dist in ['redhat', 'centos', 'fedora']:
+    #     return Rpm()
 
-    # There are so many distros...
+    # There are so many distros; just a double check.
     if in_path('pacman'):
         return Pacman()
-    elif in_path('dpkg'):
-        return Dpkg()
-    elif in_path('rpm'):
-        return Rpm()
+    # elif in_path('dpkg'):
+    #     return Dpkg()
+    # elif in_path('rpm'):
+    #     return Rpm()
 
     print("I'm sorry, but looks like your system isn't supported :-(")
-    print("It's also possible your system isn't detected properly; use `{} -P'".format(sys.argv[0]))
-    print("to get a list of supported platforms; you can use `{} -p platform_name'".format(sys.argv[0]))
+    print(
+        "It's also possible your system isn't detected properly; use `{} -P'".format(sys.argv[0]))
+    print(
+        "to get a list of supported platforms; you can use `{} -p platform_name'".format(sys.argv[0]))
     print("to select one manually.")
     print('')
     print("Please email me at martin@arp242.net! If you provide some example outputs then")
@@ -290,10 +297,12 @@ def run_editor(pkgs):
     packages *not* to be removed. """
 
     maxlen = max([len(p[1]) for p in pkgs])
-    pkgs_fmt = ['{}{}{}'.format(p[1], ' ' * (maxlen - len(p[1]) + 2), p[2]) for p in pkgs]
+    pkgs_fmt = ['{}{}{}'.format(
+        p[1], ' ' * (maxlen - len(p[1]) + 2), p[2]) for p in pkgs]
 
     with tempfile.NamedTemporaryFile('w+', prefix='pkg-cutleaves-') as fp:
-        fp.write('# Delete or comment out the lines whose packages you want removed.\n')
+        fp.write(
+            '# Delete or comment out the lines whose packages you want removed.\n')
         fp.write('# Simply save and quit when you\'re done.\n')
         fp.write('\n'.join(pkgs_fmt))
         fp.flush()
@@ -427,7 +436,7 @@ if __name__ == '__main__':
 
 # The MIT License (MIT)
 #
-# Copyright © 2015-2017 Martin Tournoij
+# Copyright © 2015-2019 Martin Tournoij
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the “Software”), to
