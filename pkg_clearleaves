@@ -88,30 +88,37 @@ class Pacman(System):
 
     def list_leafs(self):
         """ Example output:
-        Name           : abs
-        Version        : 2.4.4-2
-        Description    : Utilities to download and work with the Arch Build
-        System (ABS)
-        Architecture   : x86_64
-        URL            : http://projects.archlinux.org/abs.git/
-        Licenses       : GPL
-        Groups         : None
-        Provides       : None
-        Depends On     : bash  rsync
-        Optional Deps  : None
-        Required By    : None
-        Optional For   : None
-        Conflicts With : None
-        Replaces       : None
-        Installed Size :  29.00 KiB
-        Packager       : Felix Yan <felixonmars@gmail.com>
-        Build Date     : Mon 30 Jun 2014 06:26:01 PM CEST
-        Install Date   : Tue 26 Aug 2014 10:35:16 AM CEST
-        Install Reason : Explicitly installed
-        Install Script : No
-        Validated By   : Signature
 
-        [...] """
+        Name            : lib32-alsa-plugins
+        Version         : 1.1.8-1
+        Description     : Extra alsa plugins (32-bit)
+        Architecture    : x86_64
+        URL             : http://www.alsa-project.org
+        Licenses        : GPL
+        Groups          : None
+        Provides        : None
+        Depends On      : lib32-alsa-lib  alsa-plugins
+        Optional Deps   : lib32-libpulse: PulseAudio plugin [installed]
+                        lib32-jack: Jack plugin
+                        lib32-libsamplerate: libsamplerate resampling plugin
+                        lib32-speex: libspeexdsp resampling plugin
+        Required By     : None
+        Optional For    : lib32-libpulse
+        Conflicts With  : None
+        Replaces        : None
+        Installed Size  : 222.00 KiB
+        Packager        : Jan Alexander Steffens (heftig) <jan.steffens@gmail.com>
+        Build Date      : Mon 14 Jan 2019 06:52:59 AM NZDT
+        Install Date    : Mon 14 Jan 2019 11:26:37 AM NZDT
+        Install Reason  : Installed as a dependency for another package
+        Install Script  : No
+        Validated By    : Signature
+
+        [.. next package ..]
+        """
+
+        # TODO: --unrequired twice to include "optional" deps. Put this in the
+        # desc output.
         out = self.run(['pacman', '--query', '--quiet',
                         '--unrequired', '--info'])
         out = out.split('\n')
