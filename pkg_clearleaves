@@ -86,7 +86,7 @@ class Pacman(System):
     """ Arch Linux and a few Arch-based distro's """
     name = 'pacman'
 
-    def list_leafs(self):
+    def list_leafs(self, optional):
         """ Example output:
 
         Name            : lib32-alsa-plugins
@@ -117,10 +117,8 @@ class Pacman(System):
         [.. next package ..]
         """
 
-        # TODO: --unrequired twice to include "optional" deps. Put this in the
-        # desc output.
-        out = self.run(['pacman', '--query', '--quiet',
-                        '--unrequired', '--info'])
+        out = self.run(['pacman', '--query', '--quiet', '--info',
+            '--unrequired'] + (['--unrequired'] if optional else []))
         out = out.split('\n')
 
         def procline(l):
@@ -136,6 +134,13 @@ class Pacman(System):
                 continue
             version = procline(out[i + 1])
             comment = procline(out[i + 2])
+            if optional:
+                for line2 in out[i:]:
+                    if line2.startswith('Optional For'):
+                        opt = procline(line2)
+                        if opt != 'None':
+                            comment += ' (optionally for: {})'.format(opt)
+                        break
             pkgs.append([name, '{} {}'.format(name, version), comment])
         return pkgs
 
@@ -384,10 +389,12 @@ if __name__ == '__main__':
     parser.add_argument('-l', '--list', action='store_true',
                         help="list leaf packages, but don't do anything else"
                              " (useful for making the exclude file)")
+    parser.add_argument('-o', '--optional', action='store_true',
+                        help="also include packages that are optionally required")
     args = vars(parser.parse_args())
 
     if args['version']:
-        print("pkg_clearleaves 1.2 by Martin Tournoij <martin@arp242.net>")
+        print("pkg_clearleaves 1.3 by Martin Tournoij <martin@arp242.net>")
         print("http://code.arp242.net/pkg_clearleaves")
         sys.exit(0)
 
@@ -412,7 +419,7 @@ if __name__ == '__main__':
     system.load_exclude(args['exclude'])
 
     seen = []
-    pkgs = [p for p in system.list_leafs() if p[0] not in seen]
+    pkgs = [p for p in system.list_leafs(args['optional']) if p[0] not in seen]
     pkgs = [[re.sub(' +', ' ', e) for e in p] for p in pkgs]
 
     if args['list']:
@@ -431,7 +438,7 @@ if __name__ == '__main__':
         leave_installed = run_editor(pkgs)
         ask_and_remove(pkgs, leave_installed)
 
-        pkgs = [p for p in system.list_leafs() if p[0] not in seen]
+        pkgs = [p for p in system.list_leafs(args['optional']) if p[0] not in seen]
         pkgs = [[re.sub(' +', ' ', e) for e in p] for p in pkgs]
         if len(pkgs) == 0:
             print('\nAll done')
