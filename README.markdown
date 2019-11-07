@@ -16,10 +16,11 @@ This only implements the visual mode (as described in the opening paragraph),
 and not the interactive mode, as I find that to be much more useful. Note that
 the flags are *not* compatible with `pkg_cutleaves`.
 
-It currently only works for Arch Linux (pacman), but its design should make it
-easier to add other platforms as well. In fact, rpm, dpkg, and FreeBSD were
-supported in earlier versions, but I added them with little testing four years
-ago, and wasn't confident they're correct, so I commented them out again.
+It currently only works for Arch Linux (pacman) and Void Linux (xbps), but its
+design should make it easier to add other platforms as well. rpm, dpkg, and
+FreeBSD were supported in earlier versions, but I added them with little testing
+four years ago, and wasn't confident they're correct, so I commented them out
+again.
 
 Feel free to test, develop, and open a PR!
 
