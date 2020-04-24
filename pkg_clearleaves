@@ -99,20 +99,30 @@ class Xbps(System):
         $ xbps-query -X vim-common
         vim-8.1.2238_1
         """
+        import xml.etree.ElementTree
+        tree = xml.etree.ElementTree.parse('/var/db/xbps/pkgdb-0.38.plist')
+        items = list(tree.getroot()[0])
 
-        out = self.run(['xbps-query', '-l']).split('\n')
-        pkgs = []
+        deps = []
+        for n in items:
+            if n.tag != 'dict':
+                continue
 
-        for p in out:
+            l = list(n)
+            for i, prop in enumerate(l):
+                if prop.tag == 'key' and prop.text == 'run_depends':
+                    deps.extend([ '-'.join(d.text.replace('>=', '-').split('-')[:-1]) for d in list(l[i + 1]) ])
+
+        orphans = []
+        for p in self.run(['xbps-query', '-l']).split('\n'):
             if p == '':
                 continue
             _, name, desc = p.split(' ', 2)
-            # TODO: this is slow, but not sure how else to do it?
-            if self.run(['xbps-query', '--revdeps', name]) != '':
-                continue
-            pkgs.append(['-'.join(name.split('-')[:-1]), name, desc.strip()])
+            c = '-'.join(name.split('-')[:-1])
+            if c not in deps:
+                orphans.append([c, name, desc.strip()])
 
-        return pkgs
+        return orphans
 
 
 class Pacman(System):
