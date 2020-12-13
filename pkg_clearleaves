@@ -51,6 +51,7 @@ class System(object):
             if not os.path.exists(f):
                 continue
             self.exclude = [l.strip() for l in open(f, 'r').readlines()]
+            self.exclude = [l for l in self.exclude if not l.startswith('#')]
             break
 
     def run(self, cmd):
@@ -177,8 +178,6 @@ class Pacman(System):
                 continue
 
             name = procline(line)
-            if name in self.exclude:
-                continue
             version = procline(out[i + 1])
             comment = procline(out[i + 2])
             if optional:
@@ -468,6 +467,7 @@ if __name__ == '__main__':
 
     seen = []
     pkgs = [p for p in system.list_leafs(args['optional']) if p[0] not in seen]
+    pkgs = [p for p in pkgs if p[0] not in system.exclude]
     pkgs = [[re.sub(' +', ' ', e) for e in p] for p in pkgs]
 
     if args['list']:
@@ -488,6 +488,7 @@ if __name__ == '__main__':
 
         pkgs = [p for p in system.list_leafs(args['optional']) if p[0] not in seen]
         pkgs = [[re.sub(' +', ' ', e) for e in p] for p in pkgs]
+        pkgs = [p for p in pkgs if p[0] not in system.exclude]
         if len(pkgs) == 0:
             print('\nAll done')
             break
