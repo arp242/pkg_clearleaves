@@ -34,8 +34,7 @@ class System(object):
             return
 
         if exclude_path is not None and not os.path.exists(exclude_path):
-            print("error: exclude file '{}' doesn't exist".format(exclude_path),
-                  file=sys.stderr)
+            print("error: exclude file '{}' doesn't exist".format(exclude_path), file=sys.stderr)
             sys.exit(1)
 
         files = [
@@ -50,7 +49,7 @@ class System(object):
         for f in files:
             if not os.path.exists(f):
                 continue
-            self.exclude = [l.strip() for l in open(f, 'r').readlines()]
+            self.exclude = [l.split('#')[0].strip() for l in open(f, 'r').readlines()]
             self.exclude = [l for l in self.exclude if not l.startswith('#')]
             break
 
